@@ -1,3 +1,4 @@
 aiogram
 g4f
 deep-translator
+feedparser
