@@ -19,15 +19,14 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 translator = GoogleTranslator(source='auto', target='ru')
 
-DB_FILE = "posted_news.json"
-posted_links = set() # Используем set для мгновенного поиска
+DB_FILE = "/workspace/posted_news.json" # Путь для Koyeb
+posted_links = []
 
-# Загрузка базы
 if os.path.exists(DB_FILE):
     try:
         with open(DB_FILE, "r", encoding="utf-8") as f:
-            posted_links = set(json.load(f))
-    except: posted_links = set()
+            posted_links = json.load(f)
+    except: posted_links = []
 
 async def get_ai_summary(prompt):
     try:
@@ -36,7 +35,23 @@ async def get_ai_summary(prompt):
             messages=[{"role": "user", "content": prompt}]
         )
         return response
-    except: return "Сэр, ИИ временно занят анализом черных дыр. Но новость важная!"
+    except: return "Сэр, ИИ анализирует данные. Новость заслуживает внимания!"
+
+async def send_post(title, sentiment, joke, link, header):
+    try:
+        # Пытаемся найти привязанный чат для кнопки комментариев
+        chat = await bot.get_chat(CHANNEL_ID)
+        buttons = [InlineKeyboardButton(text="📖 Источник", url=link)]
+        
+        if chat.linked_chat_id:
+            # Кнопка, которая ведет сразу в обсуждение
+            buttons.append(InlineKeyboardButton(text="💬 Обсудить", url=f"https://t.me/c/{str(chat.linked_chat_id)[4:]}/1"))
+            
+        markup = InlineKeyboardMarkup(inline_keyboard=[buttons])
+        msg = f"{header}\n\n{sentiment}\n\n📌 {title}\n\n💬 *Джарвис:* {joke}"
+        await bot.send_message(CHANNEL_ID, msg, parse_mode="Markdown", reply_markup=markup)
+    except Exception as e:
+        logging.error(f"Ошибка отправки: {e}")
 
 async def main_loop():
     SOURCES = [
@@ -45,55 +60,45 @@ async def main_loop():
         {"url": "https://cryptopotato.com/feed", "h": "🚨 КИТОВЫЙ РАДАР"}, 
         {"url": "https://www.forexfactory.com/ff_calendar_thisweek.xml", "h": "📊 МАКРО"}
     ]
-    
     warsaw_tz = pytz.timezone('Europe/Warsaw')
-    last_morning = None
-    last_evening = None
+    last_morning, last_evening = None, None
 
     async with aiohttp.ClientSession(headers={'User-Agent': 'Mozilla/5.0'}) as session:
         while True:
             now = datetime.datetime.now(warsaw_tz)
             
-            # --- БРИФИНГИ ПО РАСПИСАНИЮ ---
+            # Отчеты
             if now.hour == 8 and now.minute == 0 and last_morning != now.day:
-                text = await get_ai_summary("Напиши план на крипто-день (Варшава 08:00). Будь дерзким.")
-                await bot.send_message(CHANNEL_ID, f"☕️ **УТРЕННИЙ БРИФИНГ**\n\n{text}")
+                res = await get_ai_summary("План на крипто-день. Коротко и дерзко.")
+                await bot.send_message(CHANNEL_ID, f"☕️ **УТРЕННИЙ БРИФИНГ**\n\n{res}")
                 last_morning = now.day
 
             if now.hour == 20 and now.minute == 0 and last_evening != now.day:
-                text = await get_ai_summary("Итоги дня в крипте и краткий прогноз на завтра. 20:00.")
-                await bot.send_message(CHANNEL_ID, f"🌙 **ВЕЧЕРНИЙ ОТЧЕТ**\n\n{text}")
+                res = await get_ai_summary("Итоги дня и прогноз на завтра.")
+                await bot.send_message(CHANNEL_ID, f"🌙 **ВЕЧЕРНИЙ ОТЧЕТ**\n\n{res}")
                 last_evening = now.day
 
-            # --- МОНИТОРИНГ НОВОСТЕЙ ---
+            # Новости
             for src in SOURCES:
                 try:
                     async with session.get(src["url"], timeout=30) as r:
                         feed = feedparser.parse(await r.read())
-                    
-                    for entry in feed.entries[:3]:
+                    for entry in feed.entries[:2]:
                         if entry.link in posted_links: continue
                         
-                        # МГНОВЕННО БЛОКИРУЕМ ПОВТОР
-                        posted_links.add(entry.link)
+                        posted_links.append(entry.link)
                         with open(DB_FILE, "w", encoding="utf-8") as f:
-                            json.dump(list(posted_links)[-100:], f)
+                            json.dump(posted_links[-100:], f)
                         
                         title_ru = translator.translate(entry.title).strip()
-                        is_whale = any(x in entry.title.lower() for x in ["whale", "million", "billion"])
-                        
-                        res = await get_ai_summary(f"Новость: {title_ru}. Напиши 1 злую шутку и ПОЗИТИВ/НЕГАТИВ.")
+                        res = await get_ai_summary(f"Новость: {title_ru}. Напиши шутку и ПОЗИТИВ/НЕГАТИВ.")
                         sentiment = "🟢 ПОЗИТИВ" if "ПОЗИТИВ" in res.upper() else "🔴 НЕГАТИВ"
                         joke = res.replace("ПОЗИТИВ", "").replace("НЕГАТИВ", "").strip()
                         
-                        header = "🚨 КИТОВЫЙ РАДАР" if is_whale else src["h"]
-                        markup = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="📖 Источник", url=entry.link)]])
-                        
-                        await bot.send_message(CHANNEL_ID, f"{header}\n\n{sentiment}\n\n📌 {title_ru}\n\n💬 *Джарвис:* {joke}", parse_mode="Markdown", reply_markup=markup)
-                        await asyncio.sleep(120) # Пауза 2 минуты между постами, чтобы не спамить
+                        await send_post(title_ru, sentiment, joke, entry.link, src["h"])
+                        await asyncio.sleep(120)
                 except: pass
-            
-            await asyncio.sleep(600) # Проверка раз в 10 минут
+            await asyncio.sleep(600)
 
 async def main():
     asyncio.create_task(main_loop())
