@@ -16,17 +16,17 @@ def load_posted():
         except: pass
     return set()
 
-def get_last_report_date():
+def get_last_report_time():
     if os.path.exists(REPORT_LOG):
-        try: return open(REPORT_LOG, "r").read().strip()
+        try: return float(open(REPORT_LOG, "r").read().strip())
         except: pass
-    return ""
+    return 0
 
 def save_posted(links):
     json.dump(list(links)[-500:], open(DB_FILE, "w"))
 
-def set_last_report_date(date_str):
-    open(REPORT_LOG, "w").write(date_str)
+def set_last_report_time():
+    open(REPORT_LOG, "w").write(str(datetime.datetime.now().timestamp()))
 
 posted_links = load_posted()
 
@@ -53,7 +53,7 @@ async def get_ai_summary(prompt):
     try:
         res = await g4f.ChatCompletion.create_async(
             model=g4f.models.gpt_4,
-            messages=[{"role": "user", "content": f"Ты Джарвис, циничный профи. Сегодня {curr_date}. {prompt}"}]
+            messages=[{"role": "user", "content": f"Ты Джарвис, циничный профи. Сейчас {curr_date}. Отвечай кратко. {prompt}"}]
         )
         if not res or any(x in res for x in ["http", "请求", "limit", "html"]): return None
         return res
@@ -62,11 +62,12 @@ async def get_ai_summary(prompt):
 @dp.message()
 async def commands_handler(message: types.Message):
     if message.from_user.is_bot: return
+    # Бот больше не реагирует на слово "брифинг" в чате, только на !анализ
     if message.text and message.text.lower() == "!анализ":
         btc, eth = await get_ticker_data("BTCUSDT"), await get_ticker_data("ETHUSDT")
-        if not btc: return await message.reply("Сэр, биржа недоступна.")
+        if not btc: return
         status = f"₿ BTC: ${btc['price']:.0f} (RSI: {btc['rsi']:.1f})\nΞ ETH: ${eth['price']:.2f} (RSI: {eth['rsi']:.1f})"
-        ai_say = await get_ai_summary(f"Данные: {status}. Дай прогноз на 30 мин.")
+        ai_say = await get_ai_summary(f"Данные: {status}. Дай краткий прогноз на 30 мин.")
         await message.reply(f"🎯 **ТЕХАНАЛИЗ**\n\n{status}\n\n💬 **Джарвис:** {ai_say}")
 
 async def main_loop():
@@ -78,18 +79,17 @@ async def main_loop():
     async with aiohttp.ClientSession(headers={'User-Agent': 'Mozilla/5.0'}) as session:
         while True:
             now = datetime.datetime.now(tz)
-            today_str = now.strftime("%Y-%m-%d")
-            last_rep = get_last_report_date()
+            last_rep_ts = get_last_report_time()
+            time_since_last = datetime.datetime.now().timestamp() - last_rep_ts
 
-            # --- ГАРАНТИЯ ОТСУТСТВИЯ ДУБЛЕЙ БРИФИНГА ---
-            if now.hour >= 8 and last_rep != today_str:
+            # --- ЖЕСТКИЙ ЗАМОК: не чаще раза в 10 часов ---
+            if now.hour >= 8 and time_since_last > 36000:
                 btc = await get_ticker_data("BTCUSDT")
-                res = await get_ai_summary(f"BTC: ${btc['price'] if btc else '88000'}. Дай утренний план.")
+                res = await get_ai_summary(f"BTC: ${btc['price'] if btc else '87900'}. Сделай один утренний план на сегодня.")
                 if res:
                     await bot.send_message(CHANNEL_ID, f"☕️ **УТРЕННИЙ БРИФИНГ**\n\n{res}")
-                    set_last_report_date(today_str)
+                    set_last_report_time()
 
-            # --- КИТЫ И МАКРО ---
             for src in SOURCES:
                 try:
                     async with session.get(src["url"], timeout=20) as r:
@@ -102,7 +102,7 @@ async def main_loop():
                         save_posted(posted_links)
                         
                         t_ru = translator.translate(entry.title).strip()
-                        res = await get_ai_summary(f"Новость: {t_ru}. Дай едкий вердикт.")
+                        res = await get_ai_summary(f"Новость: {t_ru}. Дай краткий вердикт.")
                         if res:
                             markup = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="📖 Источник", url=entry.link)]])
                             await bot.send_message(CHANNEL_ID, f"{src['h']}\n\n📌 {t_ru}\n\n💬 *Джарвис:* {res}", reply_markup=markup)
