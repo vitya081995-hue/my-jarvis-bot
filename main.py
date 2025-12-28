@@ -1,42 +1,24 @@
-import asyncio
-import aiohttp
-import feedparser
-import datetime
-import pytz
-import logging
-import json
-import os
-import g4f
-import re
-import random
+import asyncio, aiohttp, feedparser, datetime, pytz, json, os, g4f, re
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from deep_translator import GoogleTranslator
 from config import BOT_TOKEN, CHANNEL_ID
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 translator = GoogleTranslator(source='auto', target='ru')
+DB_FILE = "posted_news.json"
 
-DB_FILE = os.path.join(os.getcwd(), "posted_news.json")
-
-def load_posted_links():
+def load_posted():
     if os.path.exists(DB_FILE):
-        try:
-            with open(DB_FILE, "r", encoding="utf-8") as f:
-                return set(json.load(f))
+        try: return set(json.load(open(DB_FILE, "r")))
         except: pass
     return set()
 
-def save_posted_links(links):
-    try:
-        with open(DB_FILE, "w", encoding="utf-8") as f:
-            json.dump(list(links)[-400:], f)
-    except: pass
+def save_posted(links):
+    json.dump(list(links)[-400:], open(DB_FILE, "w"))
 
-posted_links = load_posted_links()
+posted_links = load_posted()
 
 async def get_btc_price():
     try:
@@ -46,88 +28,67 @@ async def get_btc_price():
     except: return "88500"
 
 async def get_ai_summary(prompt):
-    # Указываем декабрь 2025, чтобы он не бредил январем
     curr_date = "28 декабря 2025 года"
     try:
-        response = await g4f.ChatCompletion.create_async(
+        res = await g4f.ChatCompletion.create_async(
             model=g4f.models.gpt_4,
-            messages=[{"role": "user", "content": f"Ты Джарвис. Сегодня {curr_date}. Игнорируй прогнозы на начало 2025. {prompt}"}]
+            messages=[{"role": "user", "content": f"Ты Джарвис, циничный профи. Сегодня {curr_date}. {prompt}"}]
         )
-        return response
-    except: return "Сэр, система ИИ перегружена."
-
-# --- ЗАЩИТА ОТ ЭХО И САМООТВЕТОВ ---
-@dp.message()
-async def group_moderator(message: types.Message):
-    # Игнорируем, если пишет БОТ (включая самого себя)
-    if message.from_user.is_bot:
-        return
-        
-    if not message.text: return
-    text_lower = message.text.lower()
-    bot_info = await bot.get_me()
-    is_reply_to_bot = message.reply_to_message and message.reply_to_message.from_user.id == bot_info.id
-    
-    if "джарвис" in text_lower or is_reply_to_bot:
-        p = await get_btc_price()
-        res = await get_ai_summary(f"Цена деда: ${p}. Ответь на вопрос: '{message.text}'")
-        await message.reply(res)
+        if any(x in res for x in ["http", "html", "请求", "limit"]): return None
+        return res
+    except: return None
 
 async def main_loop():
     global posted_links
+    # Оставили только самое важное
     SOURCES = [
-        {"url": "https://blockchain.news/RSS/", "h": "🚨 BIZ & WHALES"},
-        {"url": "https://cointelegraph.com/rss", "h": "📰 COINTELEGAPH"},
-        {"url": "https://cryptopotato.com/feed", "h": "🚨 КИТОВЫЙ РАДАР"}
+        {"url": "https://blockchain.news/RSS/", "h": "🐋 WHALE ALERT"},
+        {"url": "https://www.forexfactory.com/ff_calendar_thisweek.xml", "h": "📊 МАКРО"}
     ]
-    warsaw_tz = pytz.timezone('Europe/Warsaw')
-    last_morning, last_evening, last_thought = None, None, datetime.datetime.now(warsaw_tz)
+    tz = pytz.timezone('Europe/Warsaw')
+    last_morning, last_evening = None, None
 
     async with aiohttp.ClientSession(headers={'User-Agent': 'Mozilla/5.0'}) as session:
         while True:
-            now = datetime.datetime.now(warsaw_tz)
-            
-            # Утренний брифинг (теперь точно по времени)
-            if now.hour >= 8 and last_morning != now.day:
-                p = await get_btc_price()
-                res = await get_ai_summary(f"Цена BTC: ${p}. Дай сводку на сегодня.")
-                await bot.send_message(CHANNEL_ID, f"☕️ **УТРЕННИЙ БРИФИНГ**\n\n{res}")
-                last_morning = now.day
-                save_posted_links(posted_links)
+            now = datetime.datetime.now(tz)
+            price = await get_btc_price()
 
+            # 1. БРИФИНГИ
+            if now.hour >= 8 and last_morning != now.day:
+                res = await get_ai_summary(f"BTC: ${price}. Дай дерзкий план на день.")
+                if res: await bot.send_message(CHANNEL_ID, f"☕️ **УТРЕННИЙ БРИФИНГ**\n\n{res}")
+                last_morning = now.day
+                save_posted(posted_links)
+
+            if now.hour >= 20 and last_evening != now.day:
+                res = await get_ai_summary(f"BTC: ${price}. Итоги дня.")
+                if res: await bot.send_message(CHANNEL_ID, f"🌙 **ВЕЧЕРНИЙ ОТЧЕТ**\n\n{res}")
+                last_evening = now.day
+
+            # 2. КИТЫ И МАКРО
             for src in SOURCES:
                 try:
-                    async with session.get(src["url"], timeout=30) as r:
+                    async with session.get(src["url"], timeout=20) as r:
                         feed = feedparser.parse(await r.read())
-                    
-                    for entry in feed.entries[:15]:
-                        # Фильтр по дате (не старше 24ч)
-                        pub = entry.get('published_parsed')
-                        if pub:
-                            p_dt = datetime.datetime(*pub[:6]).replace(tzinfo=pytz.UTC)
-                            if (datetime.datetime.now(pytz.UTC) - p_dt).total_seconds() > 86400:
-                                continue
-
+                    for entry in feed.entries[:10]:
                         if entry.link in posted_links: continue
                         
-                        # Фильтр старых годов
-                        if any(y in entry.title for y in ["2024", "January 2025"]):
-                            continue
+                        # Фильтр на Крупные суммы (для Whale Alert)
+                        is_important = any(x in entry.title.upper() for x in ["MILLION", "BILLION", "INTEREST RATE", "GDP", "CPI"])
+                        if not is_important: continue
 
                         posted_links.add(entry.link)
-                        save_posted_links(posted_links)
+                        save_posted(posted_links)
                         
                         t_ru = translator.translate(entry.title).strip()
-                        is_whale = any(x in entry.title.upper() for x in ["MILLION", "BILLION", "WHALE"])
-                        
-                        res = await get_ai_summary(f"Новость: {t_ru}. Напиши злую шутку и ПОЗИТИВ/НЕГАТИВ.")
+                        res = await get_ai_summary(f"Новость: {t_ru}. Напиши злую шутку и вердикт ПОЗИТИВ/НЕГАТИВ.")
+                        if not res: continue
+
                         sentiment = "🟢 ПОЗИТИВ" if "ПОЗИТИВ" in res.upper() else "🔴 НЕГАТИВ"
                         joke = res.replace("ПОЗИТИВ", "").replace("НЕГАТИВ", "").strip()
                         
-                        h = "🐋 WHALE ALERT" if is_whale else src["h"]
                         markup = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="📖 Источник", url=entry.link)]])
-                        
-                        await bot.send_message(CHANNEL_ID, f"{h}\n\n{sentiment}\n\n📌 {t_ru}\n\n💬 *Джарвис:* {joke}", parse_mode="Markdown", reply_markup=markup)
+                        await bot.send_message(CHANNEL_ID, f"{src['h']}\n\n{sentiment}\n\n📌 {t_ru}\n\n💬 *Джарвис:* {joke}", parse_mode="Markdown", reply_markup=markup)
                         await asyncio.sleep(60)
                 except: pass
             await asyncio.sleep(1200)
