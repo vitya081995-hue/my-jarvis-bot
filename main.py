@@ -27,15 +27,15 @@ async def get_ai_summary(prompt):
     try:
         res = await g4f.ChatCompletion.create_async(
             model=g4f.models.gpt_4,
-            messages=[{"role": "user", "content": f"Ты Джарвис, циничный крипто-аналитик. Сейчас {curr_time}. Отвечай кратко и по делу. {prompt}"}]
+            messages=[{"role": "user", "content": f"Ты Джарвис, циничный крипто-аналитик. Сейчас {curr_time}. Отвечай кратко, едко и по делу. {prompt}"}]
         )
         return res if res and "http" not in res else None
     except: return None
 
 async def main_loop():
     global posted_links
-    # Прямая ссылка на RSS ленту Whale Alert через агрегатор
-    WHALE_RSS = "https://www.cryptocontrol.io/en/newsfeed/rss/binance-whale-alert" # Альтернативный поток
+    # Прямой агрегатор всех алертов Whale Alert
+    WHALE_RSS = "https://www.cryptocontrol.io/en/newsfeed/rss/binance-whale-alert" 
     tz = pytz.timezone('Europe/Warsaw')
 
     async with aiohttp.ClientSession(headers={'User-Agent': 'Mozilla/5.0'}) as session:
@@ -44,38 +44,38 @@ async def main_loop():
             today = now.strftime("%Y-%m-%d")
 
             # 1. Утренний брифинг (8:00)
-            if now.hour == 8 and now.minute <= 15 and get_last_report_date() != today:
-                res = await get_ai_summary("Сделай краткий и дерзкий торговый план на сегодня.")
+            if now.hour == 8 and now.minute <= 10 and get_last_report_date() != today:
+                res = await get_ai_summary("Сделай краткий план на сегодня. Только уровни и цели.")
                 if res:
                     await bot.send_message(CHANNEL_ID, f"☕️ **УТРЕННИЙ БРИФИНГ**\n\n{res}")
                     open(REPORT_LOG, "w").write(today)
 
-            # 2. Мониторинг китов (каждые 60 секунд)
+            # 2. Мониторинг ВСЕХ КРУПНЫХ ПЕРЕВОДОВ
             try:
                 async with session.get(WHALE_RSS, timeout=15) as r:
                     feed = feedparser.parse(await r.read())
                 
-                # Идем по записям в обратном порядке, чтобы постить старые сначала
-                for entry in reversed(feed.entries[:15]):
+                # Проверяем последние 20 записей
+                for entry in reversed(feed.entries[:20]):
                     if entry.link in posted_links: continue
                     
-                    # Фильтр только по важным движениям (USDC, USDT, PYUSD, BTC, ETH)
-                    text_to_check = entry.title.upper()
-                    if any(x in text_to_check for x in ["WHALE", "TRANSFERRED", "BURNED", "MILLION", "PYUSD"]):
+                    title_up = entry.title.upper()
+                    # Ловим всё: переводы, сжигания, чеканку любых монет
+                    if any(x in title_up for x in ["WHALE", "TRANSFERRED", "BURNED", "MINTED", "MILLION"]):
                         posted_links.add(entry.link)
-                        json.dump(list(posted_links)[-300:], open(DB_FILE, "w"))
+                        json.dump(list(posted_links)[-400:], open(DB_FILE, "w"))
                         
                         t_ru = translator.translate(entry.title).strip()
-                        # Джарвис анализирует конкретный перевод
-                        res = await get_ai_summary(f"Кит перевел: {t_ru}. Что это значит для рынка? Дай краткий вердикт.")
+                        # Джарвис анализирует движение кита
+                        res = await get_ai_summary(f"Крупный перевод: {t_ru}. Что это значит? Дай краткий вердикт.")
                         
                         if res:
-                            markup = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔍 Детали транзакции", url=entry.link)]])
+                            markup = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔍 Читать в источнике", url=entry.link)]])
                             await bot.send_message(CHANNEL_ID, f"🐋 **WHALE ALERT**\n\n📌 {t_ru}\n\n💬 **Джарвис:** {res}", reply_markup=markup)
-                        await asyncio.sleep(10) # Чтобы не спамить в одну секунду
+                        await asyncio.sleep(5) 
             except: pass
 
-            await asyncio.sleep(60)
+            await asyncio.sleep(60) # Проверка каждую минуту
 
 async def main():
     asyncio.create_task(main_loop())
