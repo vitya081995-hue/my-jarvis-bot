@@ -10,6 +10,7 @@ translator = GoogleTranslator(source='auto', target='ru')
 DB_FILE = "posted_news.json"
 REPORT_LOG = "last_report.txt"
 
+# Защита от дублей и авто-создание файлов
 def load_posted():
     if os.path.exists(DB_FILE):
         try: return set(json.load(open(DB_FILE, "r")))
@@ -27,14 +28,14 @@ async def get_ai_summary(prompt):
     try:
         res = await g4f.ChatCompletion.create_async(
             model=g4f.models.gpt_4,
-            messages=[{"role": "user", "content": f"Ты Джарвис, циничный крипто-аналитик. Сейчас {curr_time}. Отвечай кратко, едко и по делу. {prompt}"}]
+            messages=[{"role": "user", "content": f"Ты Джарвис, крипто-аналитик. Сейчас {curr_time}. Отвечай кратко и едко. {prompt}"}]
         )
         return res if res and "http" not in res else None
     except: return None
 
 async def main_loop():
     global posted_links
-    # Прямой агрегатор всех алертов Whale Alert
+    # Агрегатор Whale Alert (видит всё, что было на ваших скринах)
     WHALE_RSS = "https://www.cryptocontrol.io/en/newsfeed/rss/binance-whale-alert" 
     tz = pytz.timezone('Europe/Warsaw')
 
@@ -43,34 +44,32 @@ async def main_loop():
             now = datetime.datetime.now(tz)
             today = now.strftime("%Y-%m-%d")
 
-            # 1. Утренний брифинг (8:00)
-            if now.hour == 8 and now.minute <= 10 and get_last_report_date() != today:
-                res = await get_ai_summary("Сделай краткий план на сегодня. Только уровни и цели.")
+            # 1. Утренний брифинг (8:00) - строго один раз
+            if now.hour == 8 and now.minute <= 5 and get_last_report_date() != today:
+                res = await get_ai_summary("Дай краткий торговый план на день без воды.")
                 if res:
                     await bot.send_message(CHANNEL_ID, f"☕️ **УТРЕННИЙ БРИФИНГ**\n\n{res}")
-                    open(REPORT_LOG, "w").write(today)
+                    with open(REPORT_LOG, "w") as f: f.write(today)
 
-            # 2. Мониторинг ВСЕХ КРУПНЫХ ПЕРЕВОДОВ
+            # 2. Мониторинг КИТОВ (все монеты: BTC, ETH, PYUSD, USDC...)
             try:
                 async with session.get(WHALE_RSS, timeout=15) as r:
                     feed = feedparser.parse(await r.read())
                 
-                # Проверяем последние 20 записей
-                for entry in reversed(feed.entries[:20]):
+                for entry in reversed(feed.entries[:15]):
                     if entry.link in posted_links: continue
                     
                     title_up = entry.title.upper()
-                    # Ловим всё: переводы, сжигания, чеканку любых монет
+                    # Ловим любые крупные движения, сжигания и чеканку
                     if any(x in title_up for x in ["WHALE", "TRANSFERRED", "BURNED", "MINTED", "MILLION"]):
                         posted_links.add(entry.link)
-                        json.dump(list(posted_links)[-400:], open(DB_FILE, "w"))
+                        with open(DB_FILE, "w") as f: json.dump(list(posted_links)[-300:], f)
                         
                         t_ru = translator.translate(entry.title).strip()
-                        # Джарвис анализирует движение кита
-                        res = await get_ai_summary(f"Крупный перевод: {t_ru}. Что это значит? Дай краткий вердикт.")
+                        res = await get_ai_summary(f"Кит: {t_ru}. Что это значит для рынка?")
                         
                         if res:
-                            markup = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔍 Читать в источнике", url=entry.link)]])
+                            markup = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔍 Детали", url=entry.link)]])
                             await bot.send_message(CHANNEL_ID, f"🐋 **WHALE ALERT**\n\n📌 {t_ru}\n\n💬 **Джарвис:** {res}", reply_markup=markup)
                         await asyncio.sleep(5) 
             except: pass
