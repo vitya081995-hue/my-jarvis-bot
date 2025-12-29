@@ -4,3 +4,4 @@ deep-translator
 feedparser
 pytz
 aiohttp
+python-dotenv
