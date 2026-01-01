@@ -1,3 +1,4 @@
 aiogram
 feedparser
 aiohttp
+ccxt
