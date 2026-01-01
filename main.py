@@ -1,17 +1,16 @@
 import asyncio
 import logging
 from aiogram import Bot, Dispatcher
-from config import BOT_TOKEN
-from aiohttp import web # Добавьте это
+from config import BOT_TOKEN, CHANNEL_ID
+from aiohttp import web
 
 logging.basicConfig(level=logging.INFO)
 
-# Крошечный сервер для обмана Koyeb
 async def handle(request):
     return web.Response(text="Jarvis is alive")
 
 async def main():
-    # Запускаем веб-сервер на порту 8000 в фоне
+    # Настройка веб-сервера для Koyeb
     app = web.Application()
     app.router.add_get('/', handle)
     runner = web.AppRunner(app)
@@ -21,6 +20,15 @@ async def main():
 
     bot = Bot(token=BOT_TOKEN)
     dp = Dispatcher()
+    
+    # --- ТЕСТОВОЕ СООБЩЕНИЕ ---
+    try:
+        await bot.send_message(chat_id=CHANNEL_ID, text="🚀 Сэр, Джарвис успешно запущен в облаке и готов к работе!")
+        print("Тестовое сообщение отправлено в канал!")
+    except Exception as e:
+        print(f"Ошибка при отправке в канал: {e}")
+    # --------------------------
+
     print("Джарвис запущен и начинает охоту на китов...")
     
     try:
