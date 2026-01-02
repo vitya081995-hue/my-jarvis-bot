@@ -2,3 +2,4 @@ aiogram
 feedparser
 aiohttp
 ccxt
+pandas
