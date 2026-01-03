@@ -1,47 +1,76 @@
 import asyncio
+import logging
 import aiohttp
 import ccxt
 import feedparser
+from bs4 import BeautifulSoup
 from aiogram import Bot, Dispatcher
+from openai import AsyncOpenAI
 from config import BOT_TOKEN, CHANNEL_ID
 from aiohttp import web
-from openai import AsyncOpenAI  # Для ИИ-рассуждений
 
-# Настройка ИИ (Бесплатный ключ можно взять на OpenRouter)
-# Если ключа пока нет, он просто будет выдавать текст сам
-AI_CLIENT = AsyncOpenAI(
+# --- НАСТРОЙКИ ---
+OPENROUTER_KEY = "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"
+ai_client = AsyncOpenAI(
     base_url="https://openrouter.ai/api/v1",
-    api_key="ВАШ_КЛЮЧ_OPENROUTER", 
+    api_key=OPENROUTER_KEY,
 )
 
-async def get_ai_opinion(news_text):
-    """Джарвис начинает рассуждать"""
+async def handle(request): return web.Response(text="Jarvis AI: Online")
+
+# --- МОЗГ ДЖАРВИСА (ИИ АНАЛИЗ) ---
+async def jarvis_analyze(context):
     try:
-        response = await AI_CLIENT.chat.completions.create(
-            model="google/gemini-2.0-flash-exp:free", # Бесплатная мощная модель
-            messages=[{
-                "role": "system", 
-                "content": "Ты - Джарвис, ИИ-помощник. Проанализируй новость и кратко скажи, как она повлияет на курс Биткоина. Будь ироничным и точным."
-            }, {"role": "user", "content": news_text}]
+        response = await ai_client.chat.completions.create(
+            model="google/gemini-2.0-flash-exp:free",
+            messages=[
+                {"role": "system", "content": "Ты - Джарвис, высокоинтеллектуальный ИИ. Твоя задача: анализировать новости и кратко (2-3 предложения) объяснять их влияние на крипторынок. Стиль: уверенный, лаконичный, британский акцент."},
+                {"role": "user", "content": f"Сэр, проанализируйте это: {context}"}
+            ]
         )
         return response.choices[0].message.content
-    except:
-        return "Сэр, мои аналитические модули перегружены, но ситуация явно накаляется."
+    except Exception as e:
+        return f"Сэр, мои аналитические цепи временно недоступны. Ошибка: {e}"
+
+# --- СБОР ДАННЫХ ---
+async def get_data():
+    exchange = ccxt.binance()
+    try:
+        btc = exchange.fetch_ticker('BTC/USDT')['last']
+        feed = feedparser.parse("https://www.investing.com/rss/news_285.rss")
+        news = feed.entries[0].title if feed.entries else "Тишина в эфире"
+        return btc, news
+    except: return "???", "Ошибка связи"
 
 async def main():
-    # ... (код сервера остается прежним) ...
+    # Запуск веб-сервера для Koyeb
+    app = web.Application()
+    app.router.add_get('/', handle)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    await web.TCPSite(runner, '0.0.0.0', 8000).start()
+
     bot = Bot(token=BOT_TOKEN)
     
-    # ЭКСТРЕННЫЙ АНАЛИЗ
-    news_brief = "США нанесли удары по Венесуэле, Мадуро захвачен. Золото растет."
-    ai_thought = await get_ai_opinion(news_brief) # Вот тут он начинает ДУМАТЬ
-    
+    # ФОРМИРОВАНИЕ ИНТЕЛЛЕКТУАЛЬНОГО ОТЧЕТА
+    btc_price, top_news = await get_data()
+    # Джарвис анализирует ситуацию в Венесуэле и новости
+    context = f"BTC ${btc_price}. Главная новость: {top_news}. Учитывай также захват Мадуро в Венесуэле США."
+    analysis = await jarvis_analyze(context)
+
     report = (
-        f"🚨 **ЭКСТРЕННЫЙ ДОКЛАД: ВЕНЕСУЭЛА**\n\n"
-        f"📍 **ФАКТЫ:** США вошли в Каракас. Мадуро вне игры.\n\n"
-        f"🧠 **РАССУЖДЕНИЯ ДЖАРВИСА:**\n{ai_thought}\n\n"
-        f"🛡️ *Системы переведены в режим 'War Room'.*"
+        f"🤖 **СИСТЕМНЫЙ ДОКЛАД ДЖАРВИСА**\n\n"
+        f"💰 **BTC:** `${btc_price}`\n"
+        f"🗞️ **TOP NEWS:** {top_news}\n\n"
+        f"🧠 **АНАЛИЗ:**\n{analysis}\n\n"
+        f"🛡️ *Все системы переведены в боевой режим.*"
     )
     
     await bot.send_message(CHANNEL_ID, report, parse_mode="Markdown")
-    # ... (дальше запуск polling) ...
+
+    dp = Dispatcher()
+    await bot.delete_webhook(drop_pending_updates=True)
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
