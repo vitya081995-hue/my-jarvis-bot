@@ -5,3 +5,4 @@ ccxt
 pandas
 beautifulsoup4
 beautifulsoup4
+openai
