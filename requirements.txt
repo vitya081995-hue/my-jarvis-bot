@@ -4,3 +4,4 @@ aiohttp
 ccxt
 pandas
 beautifulsoup4
+beautifulsoup4
